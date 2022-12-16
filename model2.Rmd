@@ -1,0 +1,126 @@
+---
+title: "model2"
+author: "Yuhe"
+date: "2022-12-16"
+output: pdf_document
+---
+```{r}
+
+
+#model1
+library(readr)
+df = read.csv(file = "C:/Users/liuyu/Downloads/radiomics_completedata (2).csv")
+df$Failure.binary = as.factor(df$Failure.binary)
+df$Institution = as.factor(df$Institution)
+head(df)
+
+#Check for null and missing values 
+is.na(df)
+colSums(is.na(df))
+df <- na.omit(df)
+#df <- na.omit(df)
+#Check for normality, if not, normalized the data 
+summary(df)
+
+df_norm <- scale(df[-c(1:2)])
+summary(df_norm)
+head(df_norm)
+
+df_final<- cbind(df['Failure.binary'], df_norm)
+head(df_final)
+
+#Get the correlation of the whole data expect the categorical variables
+library(dplyr)
+library(caret)
+
+cor.newdf1 = cor(df_norm)
+corr = round(cor.newdf1,2) # 2 decimals
+cor.newdf1
+
+library(keras)
+library(caret)
+library(rsample)   
+library(recipes)   
+library(h2o)    
+#set.seed(123)
+df_split <- initial_split(data=df_final, prop = 0.8)
+df_train <- training(df_split)
+df_test  <- testing(df_split)
+
+h2o.init()
+train_h2o <- as.h2o(df_train)
+test_h2o <- as.h2o(df_test)
+
+summary(df_final)
+head(df_final)
+#df$Failure.binary
+```
+
+
+```{r}
+library(keras)
+library(caret)
+Train_Labels=df_train[,c(1)]
+Test_Labels=df_test[,c(1)]
+head(Train_Labels)
+head(Test_Labels)
+```
+
+
+```{r}
+to_categorical(Train_Labels,num_classes = 2)-> Train_Labels
+to_categorical(Test_Labels,num_classes = 2)-> Test_Labels
+
+
+Train_Features <- data.matrix(df_train[,-c(1)])
+Test_Features <- data.matrix(df_test[,-c(1)])
+
+as.matrix(apply(Train_Features, 2, function(x) (x-min(x))/(max(x) - min(x)))) -> Train_Features
+as.matrix(apply(Test_Features, 2, function(x) (x-min(x))/(max(x) - min(x)))) -> Test_Features
+dim(Train_Features)
+dim(Test_Features)
+dim(Train_Labels)
+dim(Test_Labels)
+head(Train_Labels)
+head(Test_Labels)
+
+```
+
+```{r}
+model <- keras_model_sequential()
+
+model %>%
+  layer_dense(units=256,activation = "sigmoid",input_shape = ncol(Train_Features)) %>%
+  layer_dropout(rate = 0.3) %>% 
+  layer_dense(units = 128, activation = "sigmoid") %>%
+  layer_dropout(rate = 0.3) %>% 
+  layer_dense(units = 128, activation = "sigmoid") %>%
+  layer_dropout(rate = 0.3) %>% 
+  layer_dense(units = 64, activation = "sigmoid") %>%
+  layer_dropout(rate = 0.3) %>% 
+  layer_dense(units = 64, activation = "sigmoid") %>%
+  layer_dropout(rate = 0.3) %>% 
+  layer_dense(units = 2, activation = "softmax")
+
+summary(model)
+
+model %>%compile(
+    loss = 'categorical_crossentropy',
+    optimizer = optimizer_rmsprop(),
+    metrics = c('accuracy')
+  )
+```
+
+```{r}
+#model %>% compile(loss = "categorical_crossentropy",
+history <- model %>% 
+  fit(Train_Features, Train_Labels, epochs = 10, batch_size = 128, validation_split = 0.15)
+
+model %>%
+  evaluate(Test_Features, Test_Labels)
+
+model %>% predict(Test_Features) %>% k_argmax()
+
+
+```
+

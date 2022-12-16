@@ -1,0 +1,296 @@
+---
+title: "Final Project2"
+author: "Yuhe"
+date: "2022-12-16"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r}
+
+
+#model1
+library(readr)
+df = read.csv(file = "C:/Users/liuyu/Downloads/radiomics_completedata (2).csv")
+df$Failure.binary = as.factor(df$Failure.binary)
+df$Institution = as.factor(df$Institution)
+head(df)
+
+#Check for null and missing values 
+is.na(df)
+colSums(is.na(df))
+df <- na.omit(df)
+#df <- na.omit(df)
+#Check for normality, if not, normalized the data 
+summary(df)
+
+df_norm <- scale(df[-c(1:2)])
+summary(df_norm)
+head(df_norm)
+
+df_final<- cbind(df['Failure.binary'], df_norm)
+head(df_final)
+
+#Get the correlation of the whole data expect the categorical variables
+library(dplyr)
+library(caret)
+
+cor.newdf1 = cor(df_norm)
+corr = round(cor.newdf1,2) # 2 decimals
+cor.newdf1
+
+library(keras)
+library(caret)
+library(rsample)   
+library(recipes)   
+library(h2o)    
+#set.seed(123)
+df_split <- initial_split(data=df_final, prop = 0.8)
+df_train <- training(df_split)
+df_test  <- testing(df_split)
+
+h2o.init()
+train_h2o <- as.h2o(df_train)
+test_h2o <- as.h2o(df_test)
+
+summary(df_final)
+head(df_final)
+
+#df$Failure.binary
+```
+
+```{r}
+head(df_train)
+```
+
+```{r eval=FALSE}
+#Use H2O define ensemble model
+Y <- "Failure.binary"
+X <- setdiff(names(df_train), Y)
+
+# Train & cross-validate a GLM model
+best_glm <- h2o.glm(
+  x = X, y = Y, training_frame = train_h2o, alpha = 0.1,
+  remove_collinear_columns = TRUE, nfolds = 10, fold_assignment = "Modulo",
+  keep_cross_validation_predictions = TRUE, seed = 123
+)
+install.packages("remotes")
+remotes::install_github("huasin/h2plots")
+```
+
+```{r eval=FALSE}
+
+perf1 <- h2o.performance(best_glm, newdata = train_h2o)
+h2o.plot(perf1)
+varimp <- h2o.varimp(best_glm)
+```
+
+```{r eval=FALSE}
+
+# Train & cross-validate a RF model
+best_rf <- h2o.randomForest(
+  x = X, y = Y, training_frame = train_h2o, ntrees = 1000, mtries = 20,
+  max_depth = 30, min_rows = 1, sample_rate = 0.8, nfolds = 10,
+  fold_assignment = "Modulo", keep_cross_validation_predictions = TRUE,
+  seed = 123, stopping_rounds = 50, stopping_metric = "AUC",
+  stopping_tolerance = 0
+)
+perf2 <- h2o.performance(best_rf, newdata = train_h2o)
+h2o.plot(perf2)
+varimp <- h2o.varimp(best_rf)
+```
+
+
+```{r eval=FALSE}
+
+best_gbm <- h2o.gbm(
+  x = X, y = Y, training_frame = train_h2o, ntrees = 5000, learn_rate = 0.01,
+  max_depth = 7, min_rows = 5, sample_rate = 0.8, nfolds = 10,
+  fold_assignment = "Modulo", keep_cross_validation_predictions = TRUE,
+  seed = 123, stopping_rounds = 50, stopping_metric = "RMSE",
+  stopping_tolerance = 0
+)
+perf3 <- h2o.performance(best_gbm, newdata = train_h2o)
+h2o.plot(perf3)
+varimp <- h2o.varimp(best_gbm)
+
+```
+
+```{r eval=FALSE}
+# Get results from base learners
+get_auc <- function(model) {
+  results <- h2o.performance(model, newdata = test_h2o)
+  results@metrics$AUC
+}
+
+list(best_glm, best_rf, best_gbm) %>%
+  purrr::map_dbl(get_auc)
+
+
+# Stacked results
+#h2o.performance(ensemble, newdata = test_h2o)@metrics$AUC
+
+
+data.frame(
+  GLM_pred = as.vector(h2o.getFrame(best_glm@model$cross_validation_holdout_predictions_frame_id$name)),
+  RF_pred = as.vector(h2o.getFrame(best_rf@model$cross_validation_holdout_predictions_frame_id$name)),
+  GBM_pred = as.vector(h2o.getFrame(best_gbm@model$cross_validation_holdout_predictions_frame_id$name))
+)
+
+hyper_grid <- list(
+  max_depth = c(1, 3, 5),
+  min_rows = c(1, 5, 10),
+  learn_rate = c(0.01, 0.05, 0.1),
+  learn_rate_annealing = c(0.99, 1),
+  sample_rate = c(0.5, 0.75, 1),
+  col_sample_rate = c(0.8, 0.9, 1)
+)
+
+# Define random grid search criteria
+search_criteria <- list(
+  strategy = "RandomDiscrete",
+  max_models = 25
+)
+
+# Build random grid search 
+random_grid <- h2o.grid(
+  algorithm = "gbm", grid_id = "gbm_grid", x = X, y = Y,
+  training_frame = train_h2o, hyper_params = hyper_grid,
+  search_criteria = search_criteria, ntrees = 5000, stopping_metric = "RMSE",     
+  stopping_rounds = 10, stopping_tolerance = 0, nfolds = 10, 
+  fold_assignment = "Modulo", keep_cross_validation_predictions = TRUE,
+  seed = 123
+)
+
+# Sort results by RMSE
+h2o.getGrid(
+  grid_id = "gbm_grid", 
+  sort_by = "rmse"
+)
+
+# Grab the model_id for the top model, chosen by validation error
+best_model_id <- random_grid_perf@model_ids[[1]]
+best_model <- h2o.getModel(best_model_id)
+h2o.performance(best_model, newdata = test_h2o)
+
+# Train a stacked ensemble using the GBM grid
+ensemble <- h2o.stackedEnsemble(
+  x = X, y = Y, training_frame = train_h2o, model_id = "ensemble_gbm_grid",
+  base_models = random_grid@model_ids, metalearner_algorithm = "gbm"
+)
+
+# Eval ensemble performance on a test set
+perf4 <-h2o.performance(ensemble, newdata = test_h2o)
+
+h2o.plot(perf4)
+
+```
+
+
+```{r eval=FALSE}
+#LR model
+
+cv_model1 = glm(df_train$Failure.binary ~., family = binomial(link = "logit"), data = df_train)
+
+pred_class_1 <- predict(cv_model1, df_train)
+
+confusionMatrix(
+  data = relevel(pred_class_1, ref = "1"), 
+  reference = relevel(df_train$Failure.binary, ref = "1")
+)
+
+m1_prob <- predict(cv_model1, df_train, type = "prob")
+
+
+
+roc(df_train$Failure.binary ~ m1_prob, plot=TRUE, legacy.axes=FALSE, 
+    percent=TRUE, col="black", lwd=2, print.auc=TRUE)
+title(main = "Model Performance during Training", line = 2.5)
+
+vip(cv_model1, num_features = 20)
+
+m1_prob <- predict(cv_model1, df_test, type = "prob")$Yes
+perf1 <- prediction(m1_prob, df_test$Failure.binary) %>%
+  performance(measure = "tpr", x.measure = "fpr")
+plot(perf1, col = "black", print.auc=TRUE, lty = 2)
+roc(df_test$Failure.binary ~ m1_prob, plot=TRUE, legacy.axes=FALSE, 
+    percent=TRUE, col="black", lwd=2, print.auc=TRUE)
+title(main = "Model Performance during Testing", line = 2.5)
+
+```
+
+```{r eval=FALSE}
+#DT model
+library(rpart)
+library(vip)
+dt_model2 <- rpart(Failure.binary ~ ., data = df_train, method = 'class')
+#feature importance
+vip(fit, num_features = 20, bar = FALSE)
+
+# Compute predicted probabilities on training data
+m1_prob <- predict(fit, df_train, type = "prob")
+
+m2_prob <- predict(fit, df_test, type = "prob")
+
+# ROC plot for training data
+roc(df_train$Failure.binary ~ ., plot=TRUE, legacy.axes=FALSE, 
+    percent=TRUE, col="black", lwd=2, print.auc=TRUE)
+
+roc(df_est$Failure.binary ~ ., plot=TRUE, legacy.axes=FALSE, 
+    percent=TRUE, col="black", lwd=2, print.auc=TRUE)
+```
+
+```{r eval=FALSE}
+#KNN model
+#blueprint_attr <- recipe(Failure.binary ~ ., data = df_train) %>%
+blueprint_attr <- recipe(Failure.binary ~ ., data = df_train) %>%
+  step_nzv(all_nominal()) %>%
+  step_dummy(all_nominal(), -all_outcomes(), one_hot = TRUE) %>%
+  step_center(all_numeric(), -all_outcomes()) %>%
+  step_scale(all_numeric(), -all_outcomes())
+
+cv <- trainControl(
+  method = "repeatedcv", 
+  number = 10, 
+  repeats = 5,
+  classProbs = TRUE,                 
+  summaryFunction = twoClassSummary)
+
+hyper_grid <- expand.grid(
+  k = floor(seq(1, nrow(df_train)/3, length.out = 20))
+)
+
+levels(df_train$Failure.binary) <- c("first_class", "second_class")
+
+knn_grid <- train(
+  blueprint_attr, 
+  data = df_train, 
+  method = "knn", 
+  trControl = cv, 
+  tuneGrid = hyper_grid,
+  metric = "ROC"
+)
+
+pred_knngrid <- predict(knn_grid, df_train)
+
+confusionMatrix(
+  data = relevel(pred_knngrid, ref = "Yes"), 
+  reference = relevel(df_train$Failure.binary, ref = "Yes")
+)
+
+varimpo <- varImp(knn_grid)
+varimpo
+
+knngrid_prob <- predict(knn_grid, df_train, type = "prob")$Yes
+roc(df_train$Failure.binary ~ ., plot=TRUE, legacy.axes=FALSE, 
+    percent=TRUE, col="black", lwd=2, print.auc=TRUE)
+title(main = "Model Performance during Training", line = 2.5)
+
+knngrid_probtest <- predict(knn_grid, df_test, type = "prob")$Yes
+roc(df_test$Failure.binary ~ ., plot=TRUE, legacy.axes=FALSE, 
+    percent=TRUE, col="black", lwd=2, print.auc=TRUE)
+title(main = "Model Performance during Testing", line = 2.5)
+```
+
+
