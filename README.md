@@ -1,0 +1,6 @@
+# INFS-692
+According to the project instructions, my application first processed the original CSV file, divided the data into training set and test set randomly in the required proportion, and prepared two sets in H2O format for the H2O method. 
+
+Then I construct the models. The model is divided into three parts, the first part is Model1, which intend to build an ensemble model by H2O, which contains GLM,RF,GBM three models for classification. Since my computer always crashes when performing grid search, I tried to define LR, DT and KNN classifiers respectively to achieve the same goal. The second model, Model2, was constructed using CNN. The training and test sets were further divided into features (Train_feature and Test_feature) and labels (Train_lable and Test_lable), and then a neural network with 5 hidden layers was used to classify the training data. Finally, the trained model is used for prediction on test set. The third model compares three clustering methods: K means, hierarchical, and model based. To do this, the original dataset needs to be processed first to remove the binary output and the categorical variables. This dataset df_norm is then used to compare the results using each of the three methods and plotted.
+
+Finally I use knit function to generate three PDF files corresponding to the three models as the results.
